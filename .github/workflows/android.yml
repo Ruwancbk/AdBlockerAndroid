@@ -1,13 +1,28 @@
+name: Build Ad Blocker APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Unzip source
         run: |
-          echo "Zip files in repo:"
-          ls -la *.zip || true
-          ZIP=AdBlockerAndroid_Complete_Source_v5.zip
-          if [ ! -f "$ZIP" ]; then
-            echo "::error::$ZIP not found in the repository root. Upload it first."
+          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::No .zip file found in the repository root. Upload the source zip first."
             exit 1
           fi
-          echo "Using $ZIP"
+          echo "Unzipping $ZIP"
           mkdir -p extracted
           unzip -q -o "$ZIP" -d extracted
           GRADLE_FILE=$(find extracted -name settings.gradle.kts | head -n 1)
@@ -19,66 +34,46 @@
           echo "Project folder: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
 
-      # Use SDK already installed on GitHub runner
-      - name: Locate Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          test -d "$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+          set -o pipefail
+          gradle --no-daemon --console=plain assembleDebug 2>&1 | tee build.log
 
-      - name: Check Android Packages
+      - name: Show errors
+        if: failure()
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          ls "$ANDROID_HOME/platforms"
-          ls "$ANDROID_HOME/build-tools"
-
-      - name: Find V5 ZIP
-        run: |
-          ZIP_FILE=$(find . -type f \
-            -name "AdBlockerAndroid_Complete_Source_v5.zip" \
-            -print -quit)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "V5 ZIP NOT FOUND"
-            exit 1
-          fi
-
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
-      - name: Extract Project
-        run: |
-          mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
-
-          PROJECT_DIR=$(find extracted \
-            -name settings.gradle.kts \
-            -printf '%h\n' | head -n 1)
-
-          test -n "$PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Verify Project
-        run: |
-          test -f "$PROJECT_DIR/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-
-      - name: Build APK
-        run: |
-          gradle --no-daemon \
-            -p "$PROJECT_DIR" assembleDebug
+          grep -E '^e: ' build.log | sed -E 's#file://[^ ]*/##' | head -20 > errors.txt || true
+          {
+            echo "### Kotlin errors"
+            echo '```'
+            cat errors.txt
+            echo '```'
+            echo "### What went wrong"
+            echo '```'
+            grep -A6 'What went wrong' build.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r line; do echo "::error::$line"; done < errors.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AdBlocker-V5-APK
+          name: AdBlocker-debug-apk
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14
