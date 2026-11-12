@@ -17,18 +17,21 @@ jobs:
     name: Test and Build Android APKs
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: ./AdBlockerAndroid
+
     steps:
-      # 1. Checkout source code
+      # 1. Checkout source
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
+      # 2. Setup Java
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       # 3. Setup Gradle
       - name: Set up Gradle
@@ -36,53 +39,42 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      # 4. Check original signing key
+      # 4. Check signing key
       - name: Verify signing keystore
-        shell: bash
         run: |
-          if [ ! -f app/adblocker.keystore ]; then
-            echo "ERROR: Original signing key not found!"
-            exit 1
-          fi
+          test -f app/adblocker.keystore
           echo "Original signing key found."
 
       # 5. Run unit tests
       - name: Run unit tests
         run: gradle --no-daemon testDebugUnitTest
 
-      # 6. Build Debug APK
-      - name: Build Debug APK
-        run: gradle --no-daemon assembleDebug
+      # 6. Build both APKs
+      - name: Build Debug and Release APKs
+        run: |
+          gradle --no-daemon assembleDebug assembleRelease
 
-      # 7. Build Release APK
-      - name: Build Release APK
-        run: gradle --no-daemon assembleRelease
-
-      # 8. Verify APK files
+      # 7. Verify APK files
       - name: Verify APK outputs
-        shell: bash
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
           test -s app/build/outputs/apk/release/app-release.apk
+          echo "Both APKs built successfully!"
 
-          echo "Both APK files created successfully."
-          ls -lh app/build/outputs/apk/debug/
-          ls -lh app/build/outputs/apk/release/
-
-      # 9. Upload Debug APK
+      # 8. Upload Debug APK
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: AdBlocker-Debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: AdBlockerAndroid/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
-      # 10. Upload Release APK
+      # 9. Upload Release APK
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: AdBlocker-Release-APK
-          path: app/build/outputs/apk/release/app-release.apk
+          path: AdBlockerAndroid/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
