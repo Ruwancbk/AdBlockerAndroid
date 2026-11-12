@@ -1,11 +1,10 @@
-name: AdBlocker Android - Debug and Release
+name: AdBlocker APK Builder
 
 on:
   push:
     branches:
       - main
       - master
-
   workflow_dispatch:
 
 permissions:
@@ -13,89 +12,109 @@ permissions:
 
 jobs:
   android:
-    name: Test and Build Android APKs
+    name: Extract, Test and Build APKs
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout Repository
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      # 4. Automatically find Android project
-      - name: Detect Android project folder
+      - name: Find and extract Android ZIP
         shell: bash
         run: |
-          SETTINGS_FILE=$(find . -maxdepth 4 \
-            -type f -name settings.gradle.kts \
-            -not -path '*/.gradle/*' | head -n 1)
+          set -euo pipefail
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Android source ZIP not found!"
+            exit 1
+          fi
+
+          echo "ZIP found: $ZIP_FILE"
+
+          EXTRACT_DIR="$RUNNER_TEMP/adblocker_source"
+          mkdir -p "$EXTRACT_DIR"
+
+          unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
+
+          SETTINGS_FILE=$(find "$EXTRACT_DIR" \
+            -type f \
+            \( -name 'settings.gradle.kts' -o -name 'settings.gradle' \) \
+            -not -path '*/.gradle/*' \
+            -not -path '*/build/*' \
+            -print -quit)
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle.kts not found!"
-            find . -maxdepth 3 -type f | head -100
+            echo "ERROR: Android project settings file not found!"
+            find "$EXTRACT_DIR" -maxdepth 5 -type f | head -100
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
 
+          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: Android app Gradle file not found!"
+            exit 1
+          fi
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project found: $PROJECT_DIR"
+          echo "Project extracted successfully!"
+          echo "Project path: $PROJECT_DIR"
 
-      # 5. Verify project files and signing key
       - name: Verify project and signing key
         shell: bash
         run: |
+          set -euo pipefail
+
           cd "$PROJECT_DIR"
 
-          test -f build.gradle.kts
-          test -f app/build.gradle.kts
-          test -f app/adblocker.keystore
+          if [ ! -f app/adblocker.keystore ]; then
+            echo "ERROR: Original signing key not found!"
+            exit 1
+          fi
 
-          echo "Project files found."
           echo "Original signing key found."
 
-      # 6. Run unit tests
       - name: Run unit tests
         shell: bash
         run: |
           cd "$PROJECT_DIR"
           gradle --no-daemon testDebugUnitTest
 
-      # 7. Build Debug and Release APKs
-      - name: Build both APKs
+      - name: Build Debug and Release APKs
         shell: bash
         run: |
           cd "$PROJECT_DIR"
           gradle --no-daemon assembleDebug assembleRelease
 
-      # 8. Verify APK files
-      - name: Verify APK outputs
+      - name: Verify APK files
         shell: bash
         run: |
-          cd "$PROJECT_DIR"
+          set -euo pipefail
 
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          test -s app/build/outputs/apk/release/app-release.apk
+          test -s "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 
-          echo "Both APKs created successfully!"
+          test -s "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk"
 
-          ls -lh app/build/outputs/apk/debug/
-          ls -lh app/build/outputs/apk/release/
+          echo "Both APKs built successfully!"
 
-      # 9. Upload Debug APK
+          ls -lh "$PROJECT_DIR/app/build/outputs/apk/debug/"
+          ls -lh "$PROJECT_DIR/app/build/outputs/apk/release/"
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -104,7 +123,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 10. Upload Release APK
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
