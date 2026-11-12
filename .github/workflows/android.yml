@@ -1,77 +1,88 @@
-name: Build Ad Blocker APK
+
+name: Build Ad Blocker Debug and Release APKs
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - master
+
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  android:
+    name: Test and Build Android APKs
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      # 1. Checkout source code
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Unzip source
-        run: |
-          ZIP=$(ls *.zip 2>/dev/null | head -n 1)
-          if [ -z "$ZIP" ]; then
-            echo "::error::No .zip file found in the repo root"
-            exit 1
-          fi
-          echo "Unzipping $ZIP"
-          mkdir -p extracted
-          unzip -q -o "$ZIP" -d extracted
-          GRADLE_FILE=$(find extracted \( -name settings.gradle.kts -o -name settings.gradle \) | head -n 1)
-          if [ -z "$GRADLE_FILE" ]; then
-            echo "::error::settings.gradle(.kts) not found in zip"
-            exit 1
-          fi
-          PROJECT_DIR=$(dirname "$GRADLE_FILE")
-          echo "Project folder: $PROJECT_DIR"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
+      # 2. Setup Java 17
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
+      # 3. Setup Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      - name: Set SDK path
-        run: echo "sdk.dir=$ANDROID_HOME" > "$PROJECT_DIR/local.properties"
-
-      - name: Build debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
+      # 4. Check original signing key
+      - name: Verify signing keystore
+        shell: bash
         run: |
-          set -o pipefail
-          gradle --no-daemon --console=plain assembleDebug 2>&1 | tee build.log
+          if [ ! -f app/adblocker.keystore ]; then
+            echo "ERROR: Original signing key not found!"
+            exit 1
+          fi
+          echo "Original signing key found."
 
-      - name: Show errors
-        if: failure()
-        working-directory: ${{ env.PROJECT_DIR }}
+      # 5. Run unit tests
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      # 6. Build Debug APK
+      - name: Build Debug APK
+        run: gradle --no-daemon assembleDebug
+
+      # 7. Build Release APK
+      - name: Build Release APK
+        run: gradle --no-daemon assembleRelease
+
+      # 8. Verify APK files
+      - name: Verify APK outputs
+        shell: bash
         run: |
-          grep -E '^e: ' build.log | sed -E 's#file://##' > errors.txt || true
-          {
-            echo "### Kotlin errors"
-            echo '```'
-            cat errors.txt
-            echo '```'
-            echo "### What went wrong"
-            echo '```'
-            grep -A6 'What went wrong' build.log || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          test -s app/build/outputs/apk/release/app-release.apk
 
-      - name: Upload APK
+          echo "Both APK files created successfully."
+          ls -lh app/build/outputs/apk/debug/
+          ls -lh app/build/outputs/apk/release/
+
+      # 9. Upload Debug APK
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: ad-blocker-debug-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: AdBlocker-Debug-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # 10. Upload Release APK
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdBlocker-Release-APK
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
